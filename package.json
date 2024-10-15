@@ -1,0 +1,28 @@
+{
+  "name": "vue3",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@onlyoffice/document-editor-vue": "^1.3.0",
+    "ant-design-vue": "^4.2.5",
+    "colormap": "^2.3.2",
+    "leaflet": "^1.9.4",
+    "leaflet-trackplayer": "^2.0.2",
+    "pinia": "^2.0.13",
+    "vue": "^3.2.47",
+    "vue-virtual-scroller": "^2.0.0-beta.8",
+    "wavesurfer.js": "^7.8.6"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^4.1.0",
+    "less": "^4.1.3",
+    "less-loader": "^11.1.3",
+    "vite": "^4.3.9"
+  }
+}
