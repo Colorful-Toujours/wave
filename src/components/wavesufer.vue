@@ -3,9 +3,15 @@
     <div class="loading" v-show="loading">
       <a-skeleton />
       <div style="color: #1890ff">音频解码中：牛马也需要休息的！</div>
+      <a-button @click="playSegmentFromBlob(1)">111</a-button>
     </div>
     <div class="NotLoading" v-show="!loading">
-      <div id="waveform" @click="handleClearRegions"></div>
+      {{ segNumbers }}
+      <div
+        id="waveform"
+        @click="handleClearRegions"
+        @wheel.prevent="handleWheel"
+      ></div>
       <div class="spectrogram" id="spectrogram" v-show="isSpectrogram"></div>
       <div class="opreate">
         <div class="timeContainer">
@@ -25,18 +31,18 @@
         <div @click="handleSkip(3)"><FastForwardFilled /></div>
         <div @click="handleBack(3)"><RetweetOutlined /></div>
         <div class="slider-container">
-          <input
-            type="range"
-            min="0"
-            max="50"
-            v-model="zoomLevel"
-            @input="handleZoom"
+          <a-slider
+            v-model:value="zoomValue"
+            :min="0"
+            :max="1000"
+            :tooltip-open="true"
+            @afterChange="triggerZoom"
           />
         </div>
         <a-select
           ref="select"
           v-model:value="state.audioRate"
-          style="width: 70px; margin-left: 20px"
+          style="width: 70px"
           @change="handleChangeRate"
           size="small"
         >
@@ -73,14 +79,20 @@ import {
 const ws = ref(null);
 const crtPlayStatus = ref("Play");
 const isSpectrogram = ref(true);
-const zoomLevel = ref(0);
+const zoomValue = ref(0);
 const loading = ref(true);
 const regions = RegionsPlugin.create();
+// 总段数
+const segNumbers = ref(0);
+const blobPools = ref([]);
 const state = reactive({
   crtTiming: "00:00",
   totalTime: "00:00",
   audioRate: 0.25,
   speeds: [0.25, 0.5, 1, 2, 4],
+  currentChunk: 0,
+  chunkSize: 1024,
+  isChunkLoading: false, // 标志
 });
 const formatTime = (seconds) => {
   seconds = Number(seconds);
@@ -105,6 +117,26 @@ const changePane = () => {
 const handleClearRegions = () => {
   regions.clearRegions();
 };
+const handleWheel = (e) => {
+  console.log("e", e);
+  // 获取滚动的距离
+  let deltaY = e.deltaY;
+  let deltaX = e.deltaX;
+
+  if (deltaY > 0) {
+    console.log("向下滚动");
+  } else {
+    console.log("向上滚动");
+  }
+
+  if (deltaX > 0) {
+    console.log("向右滚动");
+  } else if (deltaX < 0) {
+    console.log("向左滚动");
+  }
+  zoomValue.value = e.deltaY;
+  ws.value.zoom(zoomValue.value);
+};
 const handlePlay = () => {
   ws.value.playPause();
 };
@@ -124,23 +156,97 @@ const changeStep = (args) => {
       .then((data) => {
         ws.value.load(
           "http://192.168.1.186:41184/bsyb/20241016/1h.wav",
-          data.data
+          data.data,
+          60
         );
       })
       .catch((error) => console.error("Error loading JSON:", error));
   } else {
-    ws.value.load("/public/sample-15s.wav");
+    // ws.value.load("/public/sample-15s.wav");
   }
 };
-const handleZoom = () => {
-  ws.value.zoom(zoomLevel.value);
+
+const getSegNumbers = () => {
+  // 请求服务端获取音频段
+  fetch(`http://127.0.0.1:3000/audio-info`)
+    .then((response) => response.text())
+    .then((data) => {
+      try {
+        const jsonData = JSON.parse(data);
+        console.log(jsonData);
+        const rangeBit = (jsonData.bit_rate * 1) / 8;
+        segNumbers.value = Math.ceil(jsonData.size / rangeBit);
+        console.log("????");
+        getSegment(3);
+      } catch (error) {
+        console.error("JSON 解析错误:", error, data);
+      }
+    });
 };
+const getSegment = (segNumber) => {
+  console.log(`Loading segment ${segNumber}`);
+  return new Promise((resolve, reject) => {
+    const chunkStart = state.chunkSize * (segNumber - 1);
+    const chunkEnd = state.chunkSize * segNumber;
+
+    fetch(`http://127.0.0.1:3000/audio-slice`, {
+      method: "GET",
+      headers: {
+        Range: `bytes=${chunkStart}-${chunkEnd}`, // 设置 Range 请求头
+      },
+    })
+      .then((response) => {
+        if (response.status === 206) {
+          return response.arrayBuffer();
+        } else {
+          reject(`Unexpected response status: ${response.status}`);
+        }
+      })
+      .then((data) => {
+        console.log('data',data);
+        const blob = new Blob([data], { type: "audio/wav" });
+        console.log("blob", blob);
+        const url = URL.createObjectURL(blob);
+        blobPools.value[segNumber] = { url };
+        // console.log(`Segment ${segNumber} loaded and cached.`);
+        console.log("blobPools", blobPools.value);
+        resolve(); // 加载完成后 resolve
+      })
+      .catch((error) => {
+        console.error("Error loading audio chunk:", error);
+        reject(error); // 如果出错，reject
+      });
+  });
+};
+// 播放指定的音频片段
+const playSegmentFromBlob = (segNumber) => {
+  loading.value = false;
+  // 检查缓存中是否有该片段
+  if (blobPools.value[segNumber]) {
+    const blobUrl = blobPools.value[segNumber].url;
+    console.log("blobUrl", blobUrl);
+    // 使用 wavesurfer 加载该音频片段的 URL
+    ws.value.load(blobUrl);
+
+    // 播放该音频片段
+    ws.value.play();
+    console.log(`Playing segment ${segNumber} from cache.`);
+  } else {
+    console.error(`Segment ${segNumber} is not cached.`);
+  }
+};
+
+const triggerZoom = (val) => {
+  console.log("after change", val);
+  ws.value.zoom(val);
+};
+
 const initWaveSurfer = () => {
   ws.value = WaveSurfer.create({
     container: "#waveform",
     waveColor: "rgb(150, 150, 250)",
     progressColor: "rgb(100, 100, 200)",
-    url: "/public/sample-6s.wav",
+    // url: "/public/sample-6s.wav",
     // url: "/public/test64m.mp3",
     backend: "MediaElement",
     // backend:'WebAudio',
@@ -156,7 +262,8 @@ const initWaveSurfer = () => {
     // autoScroll
     autoScroll: false,
     // minPxPerSec
-    minPxPerSec: 100,
+    minPxPerSec: 10,
+    scrollParent: true,
     audioRate: 0.5,
     plugins: [
       // 注册时间轴插件
@@ -185,7 +292,7 @@ const initWaveSurfer = () => {
       }),
       ZoomPlugin.create({
         scale: 0.5,
-        maxZoom: 100,
+        maxZoom: 1000,
       }),
     ],
   });
@@ -201,13 +308,6 @@ const initWaveSurfer = () => {
   ws.value.on("decode", (duration) => {
     console.log("Decode", duration + "s");
     loading.value = false;
-    const slider = document.querySelector('input[type="range"]');
-
-    slider.addEventListener("input", (e) => {
-      const minPxPerSec = e.target.valueAsNumber;
-      console.log("minPxPerSec", minPxPerSec);
-      ws.value.zoom(minPxPerSec);
-    });
   });
   ws.value.on("redrawcomplete", () => {
     console.log("Redraw began");
@@ -221,7 +321,16 @@ const initWaveSurfer = () => {
     console.log("Pause 暂停");
   });
   ws.value.on("timeupdate", (currentTime) => {
-    console.log("Time", currentTime + "s");
+    const currentDuration = ws.value.getDuration();
+    const timeRemaining = currentDuration - currentTime;
+
+    // 当剩余时间少于2秒时，加载并播放下一段
+    if (timeRemaining < 2 && !state.isChunkLoading) {
+      const nextSegment = state.currentChunk + 1;
+      if (nextSegment <= segNumbers.value) {
+        playSegment(nextSegment); // 自动播放下一段
+      }
+    }
 
     state.crtTiming = formatTime(currentTime);
   });
@@ -245,6 +354,7 @@ const initWaveSurfer = () => {
 };
 
 onMounted(() => {
+  getSegNumbers();
   initWaveSurfer();
 });
 </script>
@@ -269,6 +379,7 @@ onMounted(() => {
     justify-content: flex-start;
     gap: 15px;
     background: #eee;
+    cursor: grab;
     .timeContainer {
       width: 100px;
       display: flex;
@@ -280,7 +391,7 @@ onMounted(() => {
         text-align: center;
         margin: 2px;
         overflow: hidden;
-        border: 2px solid #1890ff;
+        border: 2px solid #d6d5d5;
       }
     }
   }
@@ -288,7 +399,11 @@ onMounted(() => {
     display: flex;
     align-items: center;
     gap: 10px;
-    width: 100px;
+    width: 60px;
+    // background: red;
+    :deep(.ant-slider) {
+      width: 60px;
+    }
   }
 }
 </style>
